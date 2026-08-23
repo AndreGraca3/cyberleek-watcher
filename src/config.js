@@ -5,6 +5,8 @@ const config = {
   PROGRAM_ID: process.env.PROGRAM_ID || '7rAgHPLDc9NryZmNdeEzyDui6D9PHkvTxMjKhNSa7w3a',
   MEMCMP_BYTES: process.env.MEMCMP_BYTES || 'G6JNBZ2BSey',
   DATA_SIZE: Number(process.env.DATA_SIZE) || 7156,
+  POLL_MEMCMP_BYTES: process.env.POLL_MEMCMP_BYTES || '5Qpj1hsHT4k',
+  POLL_DATA_SIZE: Number(process.env.POLL_DATA_SIZE) || 2800,
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
   DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL || '',
   UPSTASH_REDIS_REST_URL: process.env.UPSTASH_REDIS_REST_URL || '',

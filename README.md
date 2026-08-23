@@ -11,23 +11,23 @@ CYBERLEEK publishes leaks as on-chain Solana accounts under program `7rAgHPLDc9N
 This watcher runs as a lightweight HTTP microservice:
 1. **`GET /health`** - Instant health check (`200 OK`).
 2. **`GET /check`** - Runs the full watcher pipeline:
-   - Fetches on-chain program accounts via Solana JSON-RPC.
-   - Decodes 7156-byte binary Borsh-like payloads.
-   - Diffs against persisted state (Upstash Redis or local fallback).
-   - Dispatches rich embed notifications to Discord if new leaks are detected.
+   - Fetches on-chain program accounts via Solana JSON-RPC (both leak accounts and poll accounts).
+   - Decodes 7156-byte leak payloads and 2800-byte poll payloads (Borsh-like binary layouts).
+   - Diffs each against its own persisted state (Upstash Redis or local fallback).
+   - Dispatches rich embed notifications to Discord if new leaks and/or new polls are detected.
    - Returns execution results as JSON.
 
 An external free cron scheduler (**cron-job.org**) pings `/check` every **60 seconds**, which keeps the Render Free instance awake 24/7 (preventing the 15-minute idle sleep) and executes checks on a strict 1-minute schedule.
 
 ### Data Path Specifications
 - **Solana Program ID**: `7rAgHPLDc9NryZmNdeEzyDui6D9PHkvTxMjKhNSa7w3a`
-- **RPC Method**: `getProgramAccounts` with filters (`memcmp` at offset 0: `G6JNBZ2BSey`, `dataSize`: `7156`)
+- **Leak RPC Method**: `getProgramAccounts` with filters (`memcmp` at offset 0: `G6JNBZ2BSey`, `dataSize`: `7156`)
+- **Poll RPC Method**: `getProgramAccounts` with filters (`memcmp` at offset 0: `5Qpj1hsHT4k`, `dataSize`: `2800`)
 - **Encoding**: `base64`
-- **Account Binary Size**: `7156` bytes
 - **Execution Time**: ~800-1000ms per poll
 - **Response Size**: ~76 KB per poll
 
-### Account Binary Layout
+### Account Binary Layout (leaks, `src/decoder.js`)
 - Bytes `0..7`: 8-byte discriminator (skip)
 - Bytes `8..39`: 32-byte authority pubkey
 - Bytes `40..47`: `i64 LE` creation timestamp (Unix seconds)
@@ -35,6 +35,24 @@ An external free cron scheduler (**cron-job.org**) pings `/check` every **60 sec
 - Bytes `52..(52+len)`: UTF-8 string title
 - Next 4 bytes: `u32 LE` item count
 - Per item: `u32 LE` label length → UTF-8 string → `u32 LE` url length → UTF-8 string
+
+### Account Binary Layout (polls, `src/pollDecoder.js`)
+- Bytes `0..7`: 8-byte discriminator (skip)
+- Bytes `8..39`: 32-byte authority pubkey (unused)
+- Bytes `40..47`: `i64 LE` creation timestamp (Unix seconds)
+- Bytes `48..79`: fixed 32-byte poll ID buffer, null-padded (e.g. `poll-1787506592812`)
+- Bytes `80..83`: `u32 LE` question length
+- Next `len` bytes: UTF-8 string question
+- Next 4 bytes: `u32 LE` option count
+- Per option: `u32 LE` length → UTF-8 string
+- Next 8 bytes: `i64 LE` `closesAt` (Unix seconds when voting ends)
+- Next 4 bytes: `u32 LE` flag-array length, followed by that many raw bytes (per-option flags; meaning unconfirmed, currently unused)
+- Next 4 bytes: `u32 LE` vote-count array length, followed by that many `u64 LE` values (one per option — appears to be token-weighted vote totals, not raw ballot counts)
+
+### Poll Lifecycle Notifications
+Two separate poll alerts are sent, tracked independently from each other and from leaks so enabling this feature never retroactively spams existing data:
+1. **New poll created** (`🗳️`/`📊 NEW POLL`) — fired once per new poll pubkey.
+2. **Poll closed / results** (`🏁 POLL CLOSED — RESULTS`) — fired once `closesAt` has passed for a poll not yet announced as closed, showing the winning option and vote share for each option. Votes/closure update the *same* on-chain account (confirmed via transaction history), so this never duplicates the "new poll" alert.
 
 ---
 
@@ -45,11 +63,12 @@ An external free cron scheduler (**cron-job.org**) pings `/check` every **60 sec
 ├── src/
 │   ├── config.js        # Environment variables & default constants
 │   ├── logger.js        # Structured Pino logger
-│   ├── decoder.js       # Binary account buffer parser
-│   ├── fetcher.js       # Solana RPC getProgramAccounts client
+│   ├── decoder.js       # Leak account binary buffer parser
+│   ├── pollDecoder.js   # Poll account binary buffer parser
+│   ├── fetcher.js       # Solana RPC getProgramAccounts client (leaks + polls)
 │   ├── store.js         # Upstash Redis REST + Local File fallback
-│   ├── engine.js        # Bootstrap & diff detection engine
-│   ├── notifier.js      # Discord webhook rich embed sender
+│   ├── engine.js        # Bootstrap & diff detection engine (leaks + polls)
+│   ├── notifier.js      # Discord webhook rich embed sender (leaks + polls)
 │   ├── server.js        # Native HTTP server (/health, /check)
 │   └── index.js         # Core orchestrator & CLI runner
 ├── test/
@@ -149,4 +168,5 @@ node test/test-discord.js
 - **Immune to Frontend Downtime**: Does not scrape the Arweave frontend (`https://cyberleek.ar.io/`). It queries the Solana blockchain directly via JSON-RPC.
 - **Zero Idle Spindown**: 1-minute cron pings keep the Render Free web service permanently awake (<15 min idle limit).
 - **Zero Historical Spam**: State baseline is absorbed silently on first run; only net-new accounts trigger Discord embeds.
+- **Polls & Leaks Tracked Independently**: New polls and new leaks are diffed and bootstrapped separately (`seenPubkeys`/`lastMaxTimestamp` for leaks vs. `seenPollPubkeys`/`lastMaxPollTimestamp` for polls) so enabling poll alerts on an existing deployment won't retroactively spam already-known leaks or vice versa.
 - **100% Free**: Operates comfortably within Render Free, Upstash Redis Free, cron-job.org Free, and Discord Webhook limits.

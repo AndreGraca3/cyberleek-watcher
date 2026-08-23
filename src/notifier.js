@@ -90,4 +90,109 @@ async function sendDiscordAlert(account, webhookUrl = config.DISCORD_WEBHOOK_URL
   }
 }
 
-module.exports = { sendDiscordAlert };
+async function sendPollAlert(poll, webhookUrl = config.DISCORD_WEBHOOK_URL) {
+  if (!webhookUrl) {
+    logger.warn({ pubkey: poll.pubkey }, 'No DISCORD_WEBHOOK_URL configured, skipping poll alert');
+    return { success: false, skipped: true };
+  }
+
+  const footerIconUrl = await getWebhookAvatarUrl(webhookUrl);
+
+  const embed = {
+    title: '📊 NEW POLL',
+    description: 'A new community poll was posted, deciding what leaks next.',
+    color: 0x9B59B6,
+    timestamp: new Date(poll.timestamp * 1000).toISOString(),
+    fields: [
+      { name: '❓ Question', value: poll.question, inline: false },
+      {
+        name: `📋 Options (${poll.options.length})`,
+        value: poll.options.map(o => `• ${o}`).join('\n') || 'None',
+        inline: false,
+      },
+      ...(poll.closesAt
+        ? [{ name: '⏰ Ends', value: `<t:${poll.closesAt}:F> (<t:${poll.closesAt}:R>)`, inline: false }]
+        : []),
+    ],
+    footer: { text: 'CYBERLEEK Watcher', ...(footerIconUrl ? { icon_url: footerIconUrl } : {}) },
+  };
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ embeds: [embed] }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      logger.error({ status: res.status, body: text, pubkey: poll.pubkey }, 'Discord poll webhook failed');
+      return { success: false, skipped: false, error: `HTTP ${res.status}` };
+    }
+
+    logger.info({ pubkey: poll.pubkey, question: poll.question }, 'Discord poll alert sent');
+    return { success: true };
+  } catch (err) {
+    logger.error({ error: err.message, pubkey: poll.pubkey }, 'Discord poll webhook error');
+    return { success: false, skipped: false, error: err.message };
+  }
+}
+
+async function sendPollResultsAlert(poll, webhookUrl = config.DISCORD_WEBHOOK_URL) {
+  if (!webhookUrl) {
+    logger.warn({ pubkey: poll.pubkey }, 'No DISCORD_WEBHOOK_URL configured, skipping poll results alert');
+    return { success: false, skipped: true };
+  }
+
+  const footerIconUrl = await getWebhookAvatarUrl(webhookUrl);
+
+  const voteCounts = poll.voteCounts || [];
+  const totalVotes = voteCounts.reduce((sum, v) => sum + v, 0);
+  const results = poll.options
+    .map((label, i) => {
+      const votes = voteCounts[i] || 0;
+      const pct = totalVotes > 0 ? ((votes / totalVotes) * 100).toFixed(1) : '0.0';
+      return { label, votes, pct };
+    })
+    .sort((a, b) => b.votes - a.votes);
+
+  const winner = totalVotes > 0 ? results[0].label : null;
+
+  const embed = {
+    title: '🏁 POLL CLOSED — RESULTS',
+    description: winner ? `**${winner}** won the vote!` : 'This poll closed with no votes recorded.',
+    color: 0x2ECC71,
+    timestamp: new Date(poll.closesAt * 1000).toISOString(),
+    fields: [
+      { name: '❓ Question', value: poll.question, inline: false },
+      {
+        name: '📋 Final Results',
+        value: results.map(r => `${r.label === winner ? '👑' : '•'} ${r.label}: ${r.pct}%`).join('\n') || 'None',
+        inline: false,
+      },
+    ],
+    footer: { text: 'CYBERLEEK Watcher', ...(footerIconUrl ? { icon_url: footerIconUrl } : {}) },
+  };
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ embeds: [embed] }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      logger.error({ status: res.status, body: text, pubkey: poll.pubkey }, 'Discord poll results webhook failed');
+      return { success: false, skipped: false, error: `HTTP ${res.status}` };
+    }
+
+    logger.info({ pubkey: poll.pubkey, question: poll.question }, 'Discord poll results alert sent');
+    return { success: true };
+  } catch (err) {
+    logger.error({ error: err.message, pubkey: poll.pubkey }, 'Discord poll results webhook error');
+    return { success: false, skipped: false, error: err.message };
+  }
+}
+
+module.exports = { sendDiscordAlert, sendPollAlert, sendPollResultsAlert };
