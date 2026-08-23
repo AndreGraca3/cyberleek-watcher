@@ -1,0 +1,23 @@
+# Investigation/debug scripts
+debug/
+
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+
+# Local state / runtime artifacts
+data/
+*.log
+
+# Downloaded investigation artifacts
+/ai agents docs
+CYBERLEEK.html
+CYBERLEEK_files/
+github/
+
+# OS junk
+.DS_Store
+Thumbs.db
+_modules

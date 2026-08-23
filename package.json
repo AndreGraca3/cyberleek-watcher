@@ -1,0 +1,20 @@
+{
+  "name": "cyberleek-watcher",
+  "version": "1.0.0",
+  "description": "CYBERLEEK Solana on-chain leak watcher",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "check:once": "node src/index.js",
+    "test": "node test/verify-fetch.js && node test/verify-engine.js && node test/verify-run.js && node test/verify-server.js"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.38.2",
+    "dotenv": "^17.4.2",
+    "pino": "^10.3.1",
+    "ws": "^8.21.3"
+  }
+}
