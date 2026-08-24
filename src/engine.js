@@ -110,10 +110,60 @@ function evaluatePollUpdates(currentPolls, storedState) {
  * "poll finished / results" alert for. Uses its own state namespace
  * (closedNotifiedPollPubkeys/pollClosuresInitialized) so it coexists with
  * leak and poll-creation tracking in the same stored state object.
+ *
+ * A poll's on-chain tally isn't final the instant closesAt passes — the
+ * ProcessResults instruction settles it shortly after, but only touches
+ * options that received votes; options with zero votes never get their
+ * flag/count updated at all (verified on real poll data — a poll's losing,
+ * zero-vote option stayed flagged 0 for 2.5+ hours after two ProcessResults
+ * calls already landed for its other options). So "wait for every flag to
+ * reach 1" doesn't work in general.
+ *
+ * We instead wait for the poll account's data (optionFlags + voteCounts) to
+ * be IDENTICAL across two consecutive checks — but a poll's data also starts
+ * out unchanging (all zero) *before* ProcessResults has even run, so a naive
+ * "unchanged since last check" comparison can false-positive on that
+ * pre-processing zero state (verified: one real poll's first ProcessResults
+ * didn't land until 177s after closesAt — a 60s-cron check at +60s and +120s
+ * would both read all-zero and look "stable" despite nothing having run yet).
+ *
+ * To avoid that, a match only counts as "stable" if BOTH compared readings
+ * were taken at least `minSettleSeconds` after closesAt. `graceSeconds` is a
+ * last-resort fallback: if a poll still hasn't stabilized this long after
+ * closesAt (e.g. a stuck/never-run ProcessResults), notify anyway with
+ * whatever tally currently exists rather than withholding forever.
  */
-function evaluatePollClosures(currentPolls, storedState) {
+function pollTallySignature(poll) {
+  return JSON.stringify({ flags: poll.optionFlags, votes: poll.voteCounts });
+}
+
+function evaluatePollClosures(currentPolls, storedState, graceSeconds = 0, minSettleSeconds = 0) {
   const nowSec = Math.floor(Date.now() / 1000);
-  const closedNow = currentPolls.filter(p => typeof p.closesAt === 'number' && p.closesAt <= nowSec);
+  const pastClose = currentPolls.filter(
+    p => typeof p.closesAt === 'number' && p.closesAt <= nowSec
+  );
+  const prevSnapshots = (storedState && storedState.pollTallySnapshots) || {};
+  const updatedSnapshots = {};
+
+  const closedNow = pastClose.filter(p => {
+    const signature = pollTallySignature(p);
+    const prev = prevSnapshots[p.pubkey];
+    const elapsed = nowSec - p.closesAt;
+    const pastMinSettle = elapsed >= minSettleSeconds;
+
+    // Snapshots are only ever recorded once past the cooldown, so `prev`
+    // (when present) is guaranteed to have been captured post-cooldown too —
+    // a match can never be an artifact of two pre-processing zero reads.
+    const stabilized = pastMinSettle && prev !== undefined && prev === signature;
+    if (pastMinSettle) {
+      updatedSnapshots[p.pubkey] = signature;
+    } else if (prev !== undefined) {
+      updatedSnapshots[p.pubkey] = prev;
+    }
+
+    const graceExpired = p.closesAt + graceSeconds <= nowSec;
+    return stabilized || graceExpired;
+  });
 
   if (!storedState || !storedState.pollClosuresInitialized) {
     const closedNotifiedPollPubkeys = closedNow.map(p => p.pubkey);
@@ -129,6 +179,7 @@ function evaluatePollClosures(currentPolls, storedState) {
       updatedState: {
         pollClosuresInitialized: true,
         closedNotifiedPollPubkeys,
+        pollTallySnapshots: updatedSnapshots,
       },
     };
   }
@@ -136,6 +187,12 @@ function evaluatePollClosures(currentPolls, storedState) {
   const seenSet = new Set(storedState.closedNotifiedPollPubkeys || []);
   const newlyClosedPolls = closedNow.filter(p => !seenSet.has(p.pubkey));
   const updatedSeen = [...seenSet, ...newlyClosedPolls.map(p => p.pubkey)];
+
+  // Drop snapshots for already-notified polls so state doesn't grow forever.
+  const notifiedSet = new Set(updatedSeen);
+  for (const pubkey of Object.keys(updatedSnapshots)) {
+    if (notifiedSet.has(pubkey)) delete updatedSnapshots[pubkey];
+  }
 
   logger.info({ newCount: newlyClosedPolls.length }, 'Poll closure diff complete');
 
@@ -145,6 +202,7 @@ function evaluatePollClosures(currentPolls, storedState) {
     updatedState: {
       pollClosuresInitialized: true,
       closedNotifiedPollPubkeys: updatedSeen,
+      pollTallySnapshots: updatedSnapshots,
     },
   };
 }

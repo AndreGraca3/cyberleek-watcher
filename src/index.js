@@ -15,7 +15,12 @@ async function runWatcher() {
 
   const { isFirstRun, newAccounts, updatedState: leakState } = evaluateUpdates(currentAccounts, storedState);
   const { isFirstRun: isFirstPollRun, newPolls, updatedState: pollState } = evaluatePollUpdates(currentPolls, storedState);
-  const { isFirstRun: isFirstClosureRun, newlyClosedPolls, updatedState: closureState } = evaluatePollClosures(currentPolls, storedState);
+  const { isFirstRun: isFirstClosureRun, newlyClosedPolls, updatedState: closureState } = evaluatePollClosures(
+    currentPolls,
+    storedState,
+    config.POLL_CLOSE_GRACE_SECONDS,
+    config.POLL_SETTLE_MIN_DELAY_SECONDS
+  );
 
   const updatedState = { ...leakState, ...pollState, ...closureState, updatedAt: new Date().toISOString() };
   let stateChanged = false;

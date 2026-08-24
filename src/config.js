@@ -7,6 +7,17 @@ const config = {
   DATA_SIZE: Number(process.env.DATA_SIZE) || 7156,
   POLL_MEMCMP_BYTES: process.env.POLL_MEMCMP_BYTES || '5Qpj1hsHT4k',
   POLL_DATA_SIZE: Number(process.env.POLL_DATA_SIZE) || 2800,
+  // Fallback only: primary signal is the poll account's data stabilizing
+  // (no changes across consecutive checks) — see engine.js. If it never
+  // stabilizes (e.g. a stuck ProcessResults crank), notify anyway once this
+  // long past closesAt.
+  POLL_CLOSE_GRACE_SECONDS: Number(process.env.POLL_CLOSE_GRACE_SECONDS) || 1800,
+  // Cooldown after closesAt before we start comparing consecutive reads for
+  // stability. Prevents mistaking "nothing has processed yet" (all-zero,
+  // unchanging) for "processing finished" (also unchanging). Set above the
+  // fastest observed first ProcessResults landing (~78s on real data), with
+  // margin for slower/larger polls (~177s observed on a 4-option poll).
+  POLL_SETTLE_MIN_DELAY_SECONDS: Number(process.env.POLL_SETTLE_MIN_DELAY_SECONDS) || 240,
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
   DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL || '',
   UPSTASH_REDIS_REST_URL: process.env.UPSTASH_REDIS_REST_URL || '',

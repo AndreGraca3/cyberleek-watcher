@@ -8,8 +8,14 @@ const logger = require('./logger');
  *   80-84: questionLen (u32 LE), followed by the question text
  *   then:  optionCount (u32 LE), followed by that many (u32 len + text) options
  *   then:  closesAt (i64 LE) — unix seconds when voting ends
- *   then:  optionFlags (u32 LE len + that many bytes, meaning unconfirmed — not
- *          used for notifications, just skipped over)
+ *   then:  optionFlags (u32 LE len + that many bytes), one per option. Verified
+ *          against on-chain data: 0 = not yet tallied, 1 = tallied/final. Set
+ *          by the program's `ProcessResults` instruction. NOTE: options with
+ *          zero votes never get their flag set at all (stays 0 forever), so
+ *          "every flag is 1" is NOT a reliable "poll is final" signal —
+ *          engine.js instead waits for optionFlags+voteCounts to stop
+ *          changing across consecutive checks (with a cooldown to avoid
+ *          treating "nothing processed yet" as "processing finished").
  *   then:  voteCounts (u32 LE len + that many u64 LE values), one per option,
  *          appears to be token-weighted vote totals rather than raw ballot counts
  */
@@ -43,6 +49,7 @@ function decodePoll(pubkey, base64Data) {
 
     const flagCount = buf.readUInt32LE(offset);
     offset += 4;
+    const optionFlags = [...buf.subarray(offset, offset + flagCount)];
     offset += flagCount;
 
     const voteCountLen = buf.readUInt32LE(offset);
@@ -60,6 +67,7 @@ function decodePoll(pubkey, base64Data) {
       question,
       options,
       closesAt,
+      optionFlags,
       voteCounts,
     };
   } catch (err) {
