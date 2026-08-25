@@ -46,7 +46,7 @@ async function sendDiscordAlert(account, webhookUrl = config.DISCORD_WEBHOOK_URL
   const isSpoiler = isSpoilerTitle(account.title);
 
   const embed = {
-    title: isSpoiler ? '⚠️ SPOILER ALERT — NEW GTA 6 LEAK' : '🚨 NEW GTA 6 LEAK',
+    title: isSpoiler ? '🚨 NEW GTA 6 LEAK (⚠️ SPOILER ALERT ⚠️)' : '🚨 NEW GTA 6 LEAK',
     description: 'For a safer viewing experience, consider searching for this leak on X (Twitter) instead of using mirror links.',
     color: 0x0064EC,
     timestamp: new Date(account.timestamp * 1000).toISOString(),
