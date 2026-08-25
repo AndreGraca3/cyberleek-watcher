@@ -17,6 +17,13 @@ const MAX_VIDEO_BYTES = (Number(config.FILEBASE_MAX_VIDEO_MB) || 200) * 1024 * 1
 // link, which would 403 on a private bucket.
 const MAX_URL_EXPIRY_SECONDS = 7 * 24 * 60 * 60;
 const EXT_RE = /\.(mp4|webm|mov|m3u8)(\?|$)/i;
+// Large direct-host files (e.g. arweave gateways) occasionally have their
+// connection dropped mid-download by the remote server; a few retries with
+// backoff resolves most of these transient failures.
+const MAX_DOWNLOAD_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = 1500;
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 let client = null;
 let clientInitialized = false;
@@ -70,74 +77,82 @@ async function mirrorVideoToFilebase(url) {
   const s3 = getClient();
   if (!s3) return null;
 
-  try {
-    let res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-    if (!res.ok) {
-      logger.warn({ url, status: res.status }, 'Video download blocked/failed, skipping Filebase mirror');
-      return null;
-    }
-
-    let contentType = res.headers.get('content-type') || '';
-
-    if (contentType.includes('text/html')) {
-      // Some hosts (e.g. temp.sh) serve an HTML "confirm download" page
-      // instead of the file itself, requiring a POST to a form action to
-      // actually receive it (see extractPostDownloadUrl, src/resolver.js).
-      // Detected generically, not hardcoded per hostname.
-      const html = await res.text();
-      const postUrl = extractPostDownloadUrl(html, res.url);
-      if (!postUrl) {
-        logger.warn({ url }, 'Resolved link served an HTML page instead of a video, skipping Filebase mirror');
-        return null;
-      }
-
-      res = await fetch(postUrl, { method: 'POST', redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      let res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
       if (!res.ok) {
-        logger.warn({ url, postUrl, status: res.status }, 'POST download request failed, skipping Filebase mirror');
+        logger.warn({ url, status: res.status }, 'Video download blocked/failed, skipping Filebase mirror');
         return null;
       }
-      contentType = res.headers.get('content-type') || '';
+
+      let contentType = res.headers.get('content-type') || '';
+
+      if (contentType.includes('text/html')) {
+        // Some hosts (e.g. temp.sh) serve an HTML "confirm download" page
+        // instead of the file itself, requiring a POST to a form action to
+        // actually receive it (see extractPostDownloadUrl, src/resolver.js).
+        // Detected generically, not hardcoded per hostname.
+        const html = await res.text();
+        const postUrl = extractPostDownloadUrl(html, res.url);
+        if (!postUrl) {
+          logger.warn({ url }, 'Resolved link served an HTML page instead of a video, skipping Filebase mirror');
+          return null;
+        }
+
+        res = await fetch(postUrl, { method: 'POST', redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+        if (!res.ok) {
+          logger.warn({ url, postUrl, status: res.status }, 'POST download request failed, skipping Filebase mirror');
+          return null;
+        }
+        contentType = res.headers.get('content-type') || '';
+      }
+
+      // Guard against ever uploading non-video content to Filebase — its
+      // free plan outright rejects HTML uploads, and this also protects
+      // against any other unexpected response type slipping through.
+      if (!contentType.startsWith('video/')) {
+        logger.warn({ url, contentType }, 'Resolved link did not serve video content, skipping Filebase mirror');
+        return null;
+      }
+
+      const declaredLength = Number(res.headers.get('content-length') || 0);
+      if (declaredLength > MAX_VIDEO_BYTES) {
+        logger.warn({ url, declaredLength }, 'Video exceeds size cap, skipping Filebase mirror');
+        return null;
+      }
+
+      const buffer = Buffer.from(await res.arrayBuffer());
+      if (buffer.length === 0 || buffer.length > MAX_VIDEO_BYTES) {
+        logger.warn({ url, size: buffer.length }, 'Video empty or exceeds size cap, skipping Filebase mirror');
+        return null;
+      }
+
+      const ext = (url.match(EXT_RE) || [null, 'mp4'])[1];
+      const key = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+      await s3.send(new PutObjectCommand({
+        Bucket: config.FILEBASE_BUCKET,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+      }));
+
+      const expiresIn = Math.min(
+        Number(config.FILEBASE_URL_EXPIRY_SECONDS) || MAX_URL_EXPIRY_SECONDS,
+        MAX_URL_EXPIRY_SECONDS
+      );
+      return getSignedUrl(s3, new GetObjectCommand({ Bucket: config.FILEBASE_BUCKET, Key: key }), { expiresIn });
+    } catch (err) {
+      const willRetry = attempt < MAX_DOWNLOAD_ATTEMPTS;
+      logger.warn(
+        { url, attempt, willRetry, error: err.message },
+        willRetry ? 'Failed to mirror video to Filebase, retrying' : 'Failed to mirror video to Filebase, continuing without it'
+      );
+      if (!willRetry) return null;
+      await sleep(RETRY_BACKOFF_MS * attempt);
     }
-
-    // Guard against ever uploading non-video content to Filebase — its
-    // free plan outright rejects HTML uploads, and this also protects
-    // against any other unexpected response type slipping through.
-    if (!contentType.startsWith('video/')) {
-      logger.warn({ url, contentType }, 'Resolved link did not serve video content, skipping Filebase mirror');
-      return null;
-    }
-
-    const declaredLength = Number(res.headers.get('content-length') || 0);
-    if (declaredLength > MAX_VIDEO_BYTES) {
-      logger.warn({ url, declaredLength }, 'Video exceeds size cap, skipping Filebase mirror');
-      return null;
-    }
-
-    const buffer = Buffer.from(await res.arrayBuffer());
-    if (buffer.length === 0 || buffer.length > MAX_VIDEO_BYTES) {
-      logger.warn({ url, size: buffer.length }, 'Video empty or exceeds size cap, skipping Filebase mirror');
-      return null;
-    }
-
-    const ext = (url.match(EXT_RE) || [null, 'mp4'])[1];
-    const key = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-
-    await s3.send(new PutObjectCommand({
-      Bucket: config.FILEBASE_BUCKET,
-      Key: key,
-      Body: buffer,
-      ContentType: contentType,
-    }));
-
-    const expiresIn = Math.min(
-      Number(config.FILEBASE_URL_EXPIRY_SECONDS) || MAX_URL_EXPIRY_SECONDS,
-      MAX_URL_EXPIRY_SECONDS
-    );
-    return getSignedUrl(s3, new GetObjectCommand({ Bucket: config.FILEBASE_BUCKET, Key: key }), { expiresIn });
-  } catch (err) {
-    logger.warn({ url, error: err.message }, 'Failed to mirror video to Filebase, continuing without it');
-    return null;
   }
+  return null;
 }
 
 /**
