@@ -1,8 +1,0 @@
-Add spoiler override param to /test-check endpoint
-
-sendDiscordAlert now accepts an optional spoilerOverride argument
-(null by default, so real leak alerts are unaffected) that forces the
-spoiler embed rendering on/off instead of using SPOILER_KEYWORDS
-title-matching. /test-check exposes this via ?spoiler=true|false.
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
