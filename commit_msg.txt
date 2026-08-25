@@ -1,7 +1,0 @@
-Add retry with backoff to Filebase video download
-
-Large direct-host files occasionally have their connection dropped
-mid-download; retry up to 3 times with backoff before falling back
-to the original mirror link.
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
