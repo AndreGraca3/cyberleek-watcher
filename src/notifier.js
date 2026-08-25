@@ -105,14 +105,17 @@ async function dispatchVideoFollowUp(account, webhookUrl, isSpoiler) {
   }
 }
 
-async function sendDiscordAlert(account, webhookUrl = config.DISCORD_WEBHOOK_URL) {
+async function sendDiscordAlert(account, webhookUrl = config.DISCORD_WEBHOOK_URL, spoilerOverride = null) {
   if (!webhookUrl) {
     logger.warn({ pubkey: account.pubkey }, 'No DISCORD_WEBHOOK_URL configured, skipping alert');
     return { success: false, skipped: true };
   }
 
   const footerIconUrl = await getWebhookAvatarUrl(webhookUrl);
-  const isSpoiler = isSpoilerTitle(account.title);
+  // spoilerOverride lets callers (e.g. the /test-check live test harness)
+  // force spoiler on/off regardless of SPOILER_KEYWORDS/title, without
+  // affecting real leak alerts, which never pass this argument.
+  const isSpoiler = spoilerOverride !== null ? spoilerOverride : isSpoilerTitle(account.title);
 
   const embed = {
     title: isSpoiler ? '🚨 NEW GTA 6 LEAK - SPOILER WARNING ⚠️' : '🚨 NEW GTA 6 LEAK',

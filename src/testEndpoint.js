@@ -16,7 +16,7 @@ const { sendDiscordAlert, trackDispatch } = require('./notifier');
  * waits on it. Check your test webhook/channel and the server logs for the
  * actual outcome.
  */
-function handleTest(mirrorUrl, webhookUrl = config.TEST_DISCORD_WEBHOOK_URL) {
+function handleTest(mirrorUrl, webhookUrl = config.TEST_DISCORD_WEBHOOK_URL, spoilerOverride = null) {
   if (!webhookUrl) {
     return { success: false, skipped: true, error: 'No TEST_DISCORD_WEBHOOK_URL configured' };
   }
@@ -35,7 +35,7 @@ function handleTest(mirrorUrl, webhookUrl = config.TEST_DISCORD_WEBHOOK_URL) {
   // Fire-and-forget, same as runWatcher() dispatching real leak alerts:
   // tracked only so the CLI/tests could flush it if needed, never awaited
   // here so the HTTP response returns immediately.
-  trackDispatch(sendDiscordAlert(fakeAccount, webhookUrl));
+  trackDispatch(sendDiscordAlert(fakeAccount, webhookUrl, spoilerOverride));
 
   return { success: true, dispatched: true, pubkey: fakeAccount.pubkey };
 }

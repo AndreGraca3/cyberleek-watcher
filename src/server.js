@@ -61,6 +61,7 @@ function createServer() {
       // pointed at TEST_DISCORD_WEBHOOK_URL instead of the real alert
       // channel. Guarded by TEST_ENDPOINT_TOKEN (when set) since it
       // triggers real network fetches/downloads/uploads/webhook posts.
+      // Optional `?spoiler=true|false` forces the spoiler embed rendering.
       if (config.TEST_ENDPOINT_TOKEN && url.searchParams.get('token') !== config.TEST_ENDPOINT_TOKEN) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'error', message: 'Invalid or missing token' }));
@@ -74,8 +75,15 @@ function createServer() {
         return;
       }
 
+      // Optional `spoiler=true`/`spoiler=false` forces the spoiler embed
+      // rendering regardless of SPOILER_KEYWORDS/title, for testing that
+      // path specifically. Omitted (or any other value) falls back to the
+      // real title-keyword-based detection, same as production.
+      const spoilerParam = url.searchParams.get('spoiler');
+      const spoilerOverride = spoilerParam === null ? null : /^true$/i.test(spoilerParam);
+
       try {
-        const result = handleTest(mirrorUrl);
+        const result = handleTest(mirrorUrl, undefined, spoilerOverride);
         // Fire-and-forget, same as /check: dispatched (202) once the alert
         // has been kicked off in the background, not once it's actually
         // landed in Discord. Only fails synchronously (200/error) when
