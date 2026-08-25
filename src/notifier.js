@@ -3,6 +3,19 @@ const logger = require('./logger');
 const { resolveDirectVideos } = require('./resolver');
 
 /**
+ * Returns true if the title contains any configured spoiler keyword as a
+ * plain substring (case-insensitive) — e.g. keyword "death" matches both
+ * "Carl death" and "carldeath". Intentionally permissive: false positives are
+ * preferred over missing a spoiler. Always false when the filter is disabled
+ * or no keywords are configured.
+ */
+function isSpoilerTitle(title, keywords = config.SPOILER_KEYWORDS) {
+  if (!config.SPOILER_FILTER_ENABLED || keywords.length === 0) return false;
+  const lowerTitle = title.toLowerCase();
+  return keywords.some(keyword => lowerTitle.includes(keyword.toLowerCase()));
+}
+
+/**
  * Fetches the webhook's own avatar URL (Discord CDN) so it can be reused as the
  * embed footer icon. Returns null if the webhook has no avatar or the lookup fails.
  */
@@ -30,13 +43,15 @@ async function sendDiscordAlert(account, webhookUrl = config.DISCORD_WEBHOOK_URL
     getWebhookAvatarUrl(webhookUrl),
   ]);
 
+  const isSpoiler = isSpoilerTitle(account.title);
+
   const embed = {
-    title: '🚨 NEW GTA 6 LEAK',
+    title: isSpoiler ? '⚠️ SPOILER ALERT — NEW GTA 6 LEAK' : '🚨 NEW GTA 6 LEAK',
     description: 'For a safer viewing experience, consider searching for this leak on X (Twitter) instead of using mirror links.',
     color: 0x0064EC,
     timestamp: new Date(account.timestamp * 1000).toISOString(),
     fields: [
-      { name: '🎬 Title', value: account.title, inline: false },
+      { name: '🎬 Title', value: isSpoiler ? `||${account.title}||` : account.title, inline: false },
       {
         name: '⚠️ Safety Notice',
         value: 'Never enter passwords or download anything except video files!',
@@ -47,14 +62,25 @@ async function sendDiscordAlert(account, webhookUrl = config.DISCORD_WEBHOOK_URL
         value: account.items.map(i => `• ||[${i.label}](${i.url})||`).join('\n') || 'None',
         inline: false,
       },
+      // When the title matches a spoiler keyword, the direct video link is kept
+      // inside the embed (spoilered) instead of being sent as a separate,
+      // auto-unfurling follow-up message.
+      ...(isSpoiler && directVideoUrls.length > 0
+        ? [{
+            name: '🎥 Direct Video (Spoiler)',
+            value: directVideoUrls.map(u => `||${u}||`).join('\n'),
+            inline: false,
+          }]
+        : []),
     ],
     footer: { text: 'CYBERLEEK Watcher', ...(footerIconUrl ? { icon_url: footerIconUrl } : {}) },
   };
 
   try {
-    // Send the embed first, then the direct video link as a separate follow-up
-    // message: Discord doesn't auto-unfurl a raw video link in the same payload
-    // that already contains a manual embed, so they must be sent separately.
+    // Send the embed first, then (for non-spoiler leaks) the direct video link
+    // as a separate follow-up message: Discord doesn't auto-unfurl a raw video
+    // link in the same payload that already contains a manual embed, so they
+    // must be sent separately.
     const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -67,7 +93,7 @@ async function sendDiscordAlert(account, webhookUrl = config.DISCORD_WEBHOOK_URL
       return { success: false, skipped: false, error: `HTTP ${res.status}` };
     }
 
-    if (directVideoUrls.length > 0) {
+    if (!isSpoiler && directVideoUrls.length > 0) {
       // Bare URLs (not markdown-wrapped, not spoilered) so Discord can auto-unfurl a
       // playable video; the mirror links in the embed above still work as a fallback.
       const videoRes = await fetch(webhookUrl, {
@@ -195,4 +221,4 @@ async function sendPollResultsAlert(poll, webhookUrl = config.DISCORD_WEBHOOK_UR
   }
 }
 
-module.exports = { sendDiscordAlert, sendPollAlert, sendPollResultsAlert };
+module.exports = { sendDiscordAlert, sendPollAlert, sendPollResultsAlert, isSpoilerTitle };

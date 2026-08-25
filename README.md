@@ -19,6 +19,8 @@ This watcher runs as a lightweight HTTP microservice:
 
 An external free cron scheduler (**cron-job.org**) pings `/check` every **60 seconds**, which keeps the Render Free instance awake 24/7 (preventing the 15-minute idle sleep) and executes checks on a strict 1-minute schedule.
 
+Optionally, `/check` accepts a `delay` query param (seconds, capped at 45): a second cron-job.org job on the same 1-minute schedule can hit `/check?delay=20` to offset itself mid-minute, so the two jobs combined poll more often than once a minute. When `delay` is set, the endpoint responds immediately with `202 {"status":"scheduled"}` and runs the actual check afterwards in the background, so cron-job.org's own request timeout is never at risk.
+
 ### Data Path Specifications
 - **Solana Program ID**: `7rAgHPLDc9NryZmNdeEzyDui6D9PHkvTxMjKhNSa7w3a`
 - **Leak RPC Method**: `getProgramAccounts` with filters (`memcmp` at offset 0: `G6JNBZ2BSey`, `dataSize`: `7156`)
@@ -160,6 +162,14 @@ node test/test-discord.js
    - **Request Method**: `GET`
    - **Save responses in job history**: Checked
 3. Save the job.
+
+### 3. (Optional) Second cron-job.org job for tighter polling
+1. Click **Create Cronjob** again:
+   - **URL**: `https://cyberleek-watcher.onrender.com/check?delay=20`
+   - **Schedule**: Every **1 minute** (`* * * * *`)
+   - **Request Method**: `GET`
+   - **Request Timeout**: leave at default — the delayed check runs in the background *after* an immediate `202` response, so it can't trigger cron-job.org's request timeout.
+2. Save the job. Combined with the first job, this polls more often than every 60 seconds without any timeout risk.
 
 ---
 

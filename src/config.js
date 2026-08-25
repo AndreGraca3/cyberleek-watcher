@@ -18,6 +18,14 @@ const config = {
   // fastest observed first ProcessResults landing (~78s on real data), with
   // margin for slower/larger polls (~177s observed on a 4-option poll).
   POLL_SETTLE_MIN_DELAY_SECONDS: Number(process.env.POLL_SETTLE_MIN_DELAY_SECONDS) || 240,
+  // When enabled, leak titles matching SPOILER_KEYWORDS are announced with a
+  // spoiler-safe embed: no auto-unfurled direct video link, everything
+  // sensitive is wrapped in Discord spoiler tags instead. See notifier.js.
+  SPOILER_FILTER_ENABLED: /^true$/i.test(process.env.SPOILER_FILTER_ENABLED || ''),
+  SPOILER_KEYWORDS: (process.env.SPOILER_KEYWORDS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean),
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
   DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL || '',
   UPSTASH_REDIS_REST_URL: process.env.UPSTASH_REDIS_REST_URL || '',
