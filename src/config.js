@@ -50,6 +50,15 @@ const config = {
   // private by default; public bucket policies require a paid plan). Capped
   // at 604800 (7 days), the SigV4 maximum, in src/uploader.js.
   FILEBASE_URL_EXPIRY_SECONDS: Number(process.env.FILEBASE_URL_EXPIRY_SECONDS) || 604800,
+  // Optional: separate Discord webhook used exclusively by the /test-video
+  // live-test endpoint (see src/server.js), so testing never posts to the
+  // real alert channel. Leave unset to disable the endpoint.
+  TEST_DISCORD_WEBHOOK_URL: process.env.TEST_DISCORD_WEBHOOK_URL || '',
+  // Optional shared-secret guard for /test-video. When set, requests must
+  // include a matching `?token=` query param, since the endpoint triggers
+  // real downloads/uploads/webhook posts and would otherwise be a public,
+  // unauthenticated way to burn Filebase/Discord/bandwidth quota.
+  TEST_ENDPOINT_TOKEN: process.env.TEST_ENDPOINT_TOKEN || '',
 };
 
 Object.freeze(config);

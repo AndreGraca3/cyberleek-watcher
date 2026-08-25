@@ -57,6 +57,15 @@ async function runTest() {
   assert(root.status === 200, 'root status is 200');
   assert(root.body.status === 'ok', 'root body.status is "ok"');
 
+  console.log('Test 4: GET /test-video (missing url param)');
+  const missingUrl = await request('/test-video');
+  assert(missingUrl.status === 400, 'test-video without url is 400');
+  assert(missingUrl.body.status === 'error', 'test-video without url body.status is "error"');
+
+  console.log('Test 5: GET /test-video (no TEST_DISCORD_WEBHOOK_URL configured)');
+  const noWebhook = await request('/test-video?url=https://example.com/video.mp4');
+  assert(noWebhook.body.skipped === true, 'test-video without webhook configured is skipped');
+
   await new Promise((resolve) => server.close(resolve));
 
   console.log(`\nResults: ${passed} passed, ${failed} failed`);

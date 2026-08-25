@@ -41,7 +41,9 @@ async function runTest() {
 
   assert(state1.initialized === true, 'state.initialized is true after bootstrap');
   assert(Array.isArray(state1.seenPubkeys), 'state.seenPubkeys is an array');
-  assert(state1.seenPubkeys.length === 8, `state.seenPubkeys has 8 entries (got ${state1.seenPubkeys.length})`);
+  // Live on-chain data grows over time, so we only assert a positive count
+  // rather than a hardcoded snapshot value.
+  assert(state1.seenPubkeys.length > 0, `state.seenPubkeys is non-empty (got ${state1.seenPubkeys.length})`);
   assert(typeof state1.lastMaxTimestamp === 'number', 'state.lastMaxTimestamp is a number');
   assert(state1.lastMaxTimestamp > 0, 'state.lastMaxTimestamp > 0');
 
@@ -52,7 +54,7 @@ async function runTest() {
   const raw2 = await fs.readFile(TEST_STATE_PATH, 'utf8');
   const state2 = JSON.parse(raw2);
 
-  assert(state2.seenPubkeys.length === 8, 'seenPubkeys unchanged after no-op run');
+  assert(state2.seenPubkeys.length === state1.seenPubkeys.length, 'seenPubkeys unchanged after no-op run');
   assert(state2.lastMaxTimestamp === state1.lastMaxTimestamp, 'lastMaxTimestamp unchanged after no-op run');
 
   // Cleanup

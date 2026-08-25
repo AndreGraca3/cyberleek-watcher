@@ -2,6 +2,7 @@ const http = require('http');
 const config = require('./config');
 const logger = require('./logger');
 const { runWatcher } = require('./index');
+const { handleTestVideo } = require('./testVideoEndpoint');
 
 // Upper bound on the `delay` query param (seconds) accepted by /check. Kept
 // safely under 60s so a delayed run can't still be pending when the *next*
@@ -45,6 +46,40 @@ function createServer() {
         res.end(JSON.stringify(result));
       } catch (err) {
         logger.error(err, 'Check endpoint failed');
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', message: err.message }));
+      }
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/test-video') {
+      // Live test harness: pass `?url=<mirror-link>` (e.g. a bedrive.ru,
+      // temp.sh, upload.ee, or arweave URL exactly like a real leak's item
+      // link) and it's run through the *full* real pipeline —
+      // resolveDirectVideos (mirror → direct video link) then best-effort
+      // Filebase mirroring if configured — before the outcome is announced
+      // to TEST_DISCORD_WEBHOOK_URL (never the real alert channel). Guarded
+      // by TEST_ENDPOINT_TOKEN (when set) since it triggers real
+      // network fetches/downloads/uploads/webhook posts.
+      if (config.TEST_ENDPOINT_TOKEN && url.searchParams.get('token') !== config.TEST_ENDPOINT_TOKEN) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', message: 'Invalid or missing token' }));
+        return;
+      }
+
+      const mirrorUrl = url.searchParams.get('url');
+      if (!mirrorUrl) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', message: 'Missing required "url" query param' }));
+        return;
+      }
+
+      try {
+        const result = await handleTestVideo(mirrorUrl);
+        res.writeHead(result.success || result.skipped ? 200 : 500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: result.success ? 'ok' : 'error', ...result }));
+      } catch (err) {
+        logger.error(err, 'Test video endpoint failed');
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'error', message: err.message }));
       }
