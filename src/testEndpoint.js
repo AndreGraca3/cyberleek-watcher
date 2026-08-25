@@ -1,5 +1,5 @@
 const config = require('./config');
-const { sendDiscordAlert, waitForPendingDispatches } = require('./notifier');
+const { sendDiscordAlert, trackDispatch } = require('./notifier');
 
 /**
  * Business logic for the `/test-check` live-test endpoint (routed in
@@ -10,8 +10,13 @@ const { sendDiscordAlert, waitForPendingDispatches } = require('./notifier');
  * pipeline (rich embed + resolveDirectVideos + Filebase mirroring + video
  * follow-up) end-to-end without touching production alert code or the real
  * DISCORD_WEBHOOK_URL channel.
+ *
+ * Mirrors the real /check behavior (src/index.js): the Discord dispatch is
+ * fire-and-forget — this function (and the endpoint's HTTP response) never
+ * waits on it. Check your test webhook/channel and the server logs for the
+ * actual outcome.
  */
-async function handleTest(mirrorUrl, webhookUrl = config.TEST_DISCORD_WEBHOOK_URL) {
+function handleTest(mirrorUrl, webhookUrl = config.TEST_DISCORD_WEBHOOK_URL) {
   if (!webhookUrl) {
     return { success: false, skipped: true, error: 'No TEST_DISCORD_WEBHOOK_URL configured' };
   }
@@ -27,15 +32,12 @@ async function handleTest(mirrorUrl, webhookUrl = config.TEST_DISCORD_WEBHOOK_UR
     items: [{ label: 'test mirror', url: mirrorUrl }],
   };
 
-  const result = await sendDiscordAlert(fakeAccount, webhookUrl);
+  // Fire-and-forget, same as runWatcher() dispatching real leak alerts:
+  // tracked only so the CLI/tests could flush it if needed, never awaited
+  // here so the HTTP response returns immediately.
+  trackDispatch(sendDiscordAlert(fakeAccount, webhookUrl));
 
-  // sendDiscordAlert dispatches the video follow-up (resolve + Filebase
-  // mirror + post) in the background via trackDispatch. Wait for it here —
-  // same mechanism the CLI uses (src/index.js) — so this manual test's HTTP
-  // response reflects the full pipeline instead of returning before it lands.
-  await waitForPendingDispatches();
-
-  return result;
+  return { success: true, dispatched: true, pubkey: fakeAccount.pubkey };
 }
 
 module.exports = { handleTest };

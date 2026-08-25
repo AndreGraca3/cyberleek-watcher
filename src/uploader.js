@@ -2,6 +2,7 @@ const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/clien
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const config = require('./config');
 const logger = require('./logger');
+const { extractPostDownloadUrl } = require('./resolver');
 
 const DOWNLOAD_TIMEOUT_MS = Number(config.FILEBASE_DOWNLOAD_TIMEOUT_MS) || 45000;
 // Safety cap so a single huge/misbehaving mirror can't blow through Render's
@@ -70,9 +71,39 @@ async function mirrorVideoToFilebase(url) {
   if (!s3) return null;
 
   try {
-    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+    let res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
     if (!res.ok) {
       logger.warn({ url, status: res.status }, 'Video download blocked/failed, skipping Filebase mirror');
+      return null;
+    }
+
+    let contentType = res.headers.get('content-type') || '';
+
+    if (contentType.includes('text/html')) {
+      // Some hosts (e.g. temp.sh) serve an HTML "confirm download" page
+      // instead of the file itself, requiring a POST to a form action to
+      // actually receive it (see extractPostDownloadUrl, src/resolver.js).
+      // Detected generically, not hardcoded per hostname.
+      const html = await res.text();
+      const postUrl = extractPostDownloadUrl(html, res.url);
+      if (!postUrl) {
+        logger.warn({ url }, 'Resolved link served an HTML page instead of a video, skipping Filebase mirror');
+        return null;
+      }
+
+      res = await fetch(postUrl, { method: 'POST', redirect: 'follow', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+      if (!res.ok) {
+        logger.warn({ url, postUrl, status: res.status }, 'POST download request failed, skipping Filebase mirror');
+        return null;
+      }
+      contentType = res.headers.get('content-type') || '';
+    }
+
+    // Guard against ever uploading non-video content to Filebase — its
+    // free plan outright rejects HTML uploads, and this also protects
+    // against any other unexpected response type slipping through.
+    if (!contentType.startsWith('video/')) {
+      logger.warn({ url, contentType }, 'Resolved link did not serve video content, skipping Filebase mirror');
       return null;
     }
 
@@ -95,7 +126,7 @@ async function mirrorVideoToFilebase(url) {
       Bucket: config.FILEBASE_BUCKET,
       Key: key,
       Body: buffer,
-      ContentType: res.headers.get('content-type') || 'video/mp4',
+      ContentType: contentType,
     }));
 
     const expiresIn = Math.min(

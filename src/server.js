@@ -75,9 +75,13 @@ function createServer() {
       }
 
       try {
-        const result = await handleTest(mirrorUrl);
-        res.writeHead(result.success || result.skipped ? 200 : 500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: result.success ? 'ok' : 'error', ...result }));
+        const result = handleTest(mirrorUrl);
+        // Fire-and-forget, same as /check: dispatched (202) once the alert
+        // has been kicked off in the background, not once it's actually
+        // landed in Discord. Only fails synchronously (200/error) when
+        // TEST_DISCORD_WEBHOOK_URL isn't configured at all.
+        res.writeHead(result.dispatched ? 202 : 200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: result.dispatched ? 'scheduled' : 'error', ...result }));
       } catch (err) {
         logger.error(err, 'Test endpoint failed');
         res.writeHead(500, { 'Content-Type': 'application/json' });

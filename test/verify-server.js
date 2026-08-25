@@ -1,4 +1,13 @@
 const http = require('http');
+
+// Isolated local config for this test — must be set BEFORE requiring
+// src/server (which requires src/config, which reads env at module load
+// time). Ensures /test-check behaves consistently in this suite regardless
+// of whatever TEST_DISCORD_WEBHOOK_URL/TEST_ENDPOINT_TOKEN happen to be set
+// in the developer's local .env.
+process.env.TEST_DISCORD_WEBHOOK_URL = '';
+process.env.TEST_ENDPOINT_TOKEN = '';
+
 const { createServer } = require('../src/server');
 
 const PORT = 3456;
