@@ -56,6 +56,21 @@ Two separate poll alerts are sent, tracked independently from each other and fro
 1. **New poll created** (`🗳️`/`📊 NEW POLL`) — fired once per new poll pubkey.
 2. **Poll closed / results** (`🏁 POLL CLOSED — RESULTS`) — fired once `closesAt` has passed for a poll not yet announced as closed, showing the winning option and vote share for each option. Votes/closure update the *same* on-chain account (confirmed via transaction history), so this never duplicates the "new poll" alert.
 
+### Filebase Video Mirroring (Optional)
+When `FILEBASE_ACCESS_KEY`, `FILEBASE_SECRET_KEY`, and `FILEBASE_BUCKET` are all set, `src/uploader.js` downloads each resolved direct video link and re-uploads it to that Filebase bucket via Filebase's S3-compatible API, so the follow-up video message (see below) links to a stable, self-hosted copy instead of the original mirror. This is entirely best-effort:
+- If Filebase isn't configured (or only partially configured), mirroring is skipped and the original mirror link is used, with no added latency. A partial config (e.g. only `FILEBASE_BUCKET` set) logs a one-time warning so a typo doesn't silently disable the feature unnoticed.
+- If the source host blocks or rate-limits the download (common for mirror sites), or the upload otherwise fails, the watcher logs a warning and falls back to the original link — it never blocks, delays, or drops the leak alert itself.
+- Downloads are capped at `FILEBASE_MAX_VIDEO_MB` (default 200MB) and `FILEBASE_DOWNLOAD_TIMEOUT_MS` (default 45s) to protect Render's free-tier bandwidth/memory limits.
+- Filebase buckets are private by default (public bucket policies require a paid Filebase plan), so mirror links are presigned S3 GET URLs, valid for `FILEBASE_URL_EXPIRY_SECONDS` (default/max 7 days — the SigV4 signature limit), not plain public `https://<bucket>.s3.filebase.com/...` links.
+- Multiple video items for the same leak download in parallel and are each buffered fully in memory, so raising `FILEBASE_MAX_VIDEO_MB` increases peak RAM use — keep it comfortably under Render free tier's ~512MB limit.
+
+### Decoupled Alert & Video Dispatch
+`/check`'s response body (diff results, counts, state) never depends on Discord delivery succeeding — state is persisted as soon as new accounts/polls are diffed, regardless of alert outcome. So all Discord dispatch is fire-and-forget from `runWatcher()`'s perspective (`src/index.js`, `trackDispatch`/`waitForPendingDispatches` in `src/notifier.js`):
+- `/check` (without the `delay` query param) only waits on the Solana RPC fetch, diff evaluation, and state save — not on any Discord webhook call, main alert or otherwise.
+- The main leak/poll alert embed is dispatched in the background as soon as new items are detected. Video link resolution, Filebase mirroring, and posting happen even further downstream, as a **separate** follow-up Discord message (`dispatchVideoFollowUp`) sent only after the main alert succeeds.
+- This is safe on the long-lived HTTP server (the Node process keeps running after the response is sent). The CLI (`npm run check:once`) explicitly waits for all pending dispatches before exiting, since it would otherwise terminate the process mid-flight.
+- Spoiler-flagged leaks still get a spoiler-safe follow-up: video links are wrapped as `||<url>||` (spoiler + suppressed embed preview) instead of being posted as bare, auto-unfurling URLs.
+
 ---
 
 ## Project Structure
@@ -71,6 +86,7 @@ Two separate poll alerts are sent, tracked independently from each other and fro
 │   ├── store.js         # Upstash Redis REST + Local File fallback
 │   ├── engine.js        # Bootstrap & diff detection engine (leaks + polls)
 │   ├── notifier.js      # Discord webhook rich embed sender (leaks + polls)
+│   ├── uploader.js      # Best-effort Filebase (S3-compatible) video mirroring
 │   ├── server.js        # Native HTTP server (/health, /check)
 │   └── index.js         # Core orchestrator & CLI runner
 ├── test/

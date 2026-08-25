@@ -32,6 +32,24 @@ const config = {
   UPSTASH_REDIS_REST_TOKEN: process.env.UPSTASH_REDIS_REST_TOKEN || '',
   STATE_KEY: process.env.STATE_KEY || 'cyberleek:state',
   LOCAL_STATE_PATH: process.env.LOCAL_STATE_PATH || './data/state.json',
+  // Optional: when all three are set, resolved direct video links are
+  // downloaded and re-uploaded to this Filebase bucket (S3-compatible API)
+  // before being posted to Discord. See src/uploader.js. Best-effort only —
+  // mirroring is skipped silently if unset, and any failure at runtime
+  // (blocked/rate-limited download, upload error) falls back to the
+  // original mirror URL without blocking the alert.
+  FILEBASE_ACCESS_KEY: process.env.FILEBASE_ACCESS_KEY || '',
+  FILEBASE_SECRET_KEY: process.env.FILEBASE_SECRET_KEY || '',
+  FILEBASE_BUCKET: process.env.FILEBASE_BUCKET || '',
+  FILEBASE_ENDPOINT: process.env.FILEBASE_ENDPOINT || 'https://s3.filebase.com',
+  // Per-video safety limits for Filebase mirroring (see src/uploader.js).
+  // Larger/slower downloads just fall back to the original mirror link.
+  FILEBASE_MAX_VIDEO_MB: Number(process.env.FILEBASE_MAX_VIDEO_MB) || 200,
+  FILEBASE_DOWNLOAD_TIMEOUT_MS: Number(process.env.FILEBASE_DOWNLOAD_TIMEOUT_MS) || 45000,
+  // How long the presigned mirror URL stays valid (Filebase buckets are
+  // private by default; public bucket policies require a paid plan). Capped
+  // at 604800 (7 days), the SigV4 maximum, in src/uploader.js.
+  FILEBASE_URL_EXPIRY_SECONDS: Number(process.env.FILEBASE_URL_EXPIRY_SECONDS) || 604800,
 };
 
 Object.freeze(config);

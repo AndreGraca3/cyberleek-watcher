@@ -12,6 +12,8 @@
     "test": "node test/verify-fetch.js && node test/verify-engine.js && node test/verify-run.js && node test/verify-server.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1117.0",
+    "@aws-sdk/s3-request-presigner": "^3.1117.0",
     "@upstash/redis": "^1.38.2",
     "dotenv": "^17.4.2",
     "pino": "^10.3.1",

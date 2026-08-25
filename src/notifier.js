@@ -1,6 +1,7 @@
 const config = require('./config');
 const logger = require('./logger');
 const { resolveDirectVideos } = require('./resolver');
+const { mirrorVideosToFilebase } = require('./uploader');
 
 /**
  * Returns true if the title contains any configured spoiler keyword as a
@@ -32,17 +33,82 @@ async function getWebhookAvatarUrl(webhookUrl) {
   }
 }
 
+// Tracks in-flight background dispatches (main alerts fired without being
+// awaited by the caller, plus their decoupled video follow-ups) so CLI runs
+// (`main()` in index.js) can await them before `process.exit()`. Not needed
+// by the long-lived HTTP server, which keeps running regardless.
+const pendingDispatches = new Set();
+
+/**
+ * Registers `promise` as in-flight background work and returns it unchanged.
+ * Swallows rejections here (each dispatch function already logs its own
+ * errors internally) purely to prevent an unhandled-rejection crash if
+ * something unexpected throws.
+ */
+function trackDispatch(promise) {
+  pendingDispatches.add(promise);
+  const settle = promise.catch(() => {}).finally(() => pendingDispatches.delete(promise));
+  void settle;
+  return promise;
+}
+
+/**
+ * Waits for all in-flight background dispatches to settle. Intended for
+ * short-lived callers (the CLI) that would otherwise exit before background
+ * work (Discord alert delivery, video resolution, Filebase mirroring, video
+ * follow-up message) completes.
+ */
+function waitForPendingDispatches() {
+  return Promise.allSettled([...pendingDispatches]);
+}
+
+/**
+ * Resolves direct video links, best-effort mirrors them to Filebase, and
+ * posts them as their own follow-up Discord message. Runs independently of
+ * (and after) the main leak alert: a slow/blocked mirror download can never
+ * delay or block the alert itself. Always spoiler-wraps the links (with
+ * embed-preview suppression via `<>`) when the leak title is a spoiler, so
+ * even this decoupled message stays spoiler-safe.
+ */
+async function dispatchVideoFollowUp(account, webhookUrl, isSpoiler) {
+  try {
+    const resolvedVideoUrls = await resolveDirectVideos(account.items);
+    if (resolvedVideoUrls.length === 0) return;
+
+    // Best-effort: mirrors each resolved video to Filebase when configured,
+    // falling back to the original URL if mirroring is disabled, blocked, or
+    // fails for any reason.
+    const videoUrls = await mirrorVideosToFilebase(resolvedVideoUrls);
+
+    const content = isSpoiler
+      ? `🎥 Direct video (Spoiler):\n${videoUrls.map(u => `||<${u}>||`).join('\n')}`
+      : `🎥 Direct video:\n${videoUrls.join('\n')}`;
+
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      logger.error({ status: res.status, body: text, pubkey: account.pubkey }, 'Discord video follow-up failed');
+      return;
+    }
+
+    logger.info({ pubkey: account.pubkey }, 'Discord video follow-up sent');
+  } catch (err) {
+    logger.error({ error: err.message, pubkey: account.pubkey }, 'Discord video follow-up error');
+  }
+}
+
 async function sendDiscordAlert(account, webhookUrl = config.DISCORD_WEBHOOK_URL) {
   if (!webhookUrl) {
     logger.warn({ pubkey: account.pubkey }, 'No DISCORD_WEBHOOK_URL configured, skipping alert');
     return { success: false, skipped: true };
   }
 
-  const [directVideoUrls, footerIconUrl] = await Promise.all([
-    resolveDirectVideos(account.items),
-    getWebhookAvatarUrl(webhookUrl),
-  ]);
-
+  const footerIconUrl = await getWebhookAvatarUrl(webhookUrl);
   const isSpoiler = isSpoilerTitle(account.title);
 
   const embed = {
@@ -62,25 +128,11 @@ async function sendDiscordAlert(account, webhookUrl = config.DISCORD_WEBHOOK_URL
         value: account.items.map(i => `• ||[${i.label}](${i.url})||`).join('\n') || 'None',
         inline: false,
       },
-      // When the title matches a spoiler keyword, the direct video link is kept
-      // inside the embed (spoilered) instead of being sent as a separate,
-      // auto-unfurling follow-up message.
-      ...(isSpoiler && directVideoUrls.length > 0
-        ? [{
-            name: '🎥 Direct Video (Spoiler)',
-            value: directVideoUrls.map(u => `||${u}||`).join('\n'),
-            inline: false,
-          }]
-        : []),
     ],
     footer: { text: 'CYBERLEEK Watcher', ...(footerIconUrl ? { icon_url: footerIconUrl } : {}) },
   };
 
   try {
-    // Send the embed first, then (for non-spoiler leaks) the direct video link
-    // as a separate follow-up message: Discord doesn't auto-unfurl a raw video
-    // link in the same payload that already contains a manual embed, so they
-    // must be sent separately.
     const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -93,22 +145,14 @@ async function sendDiscordAlert(account, webhookUrl = config.DISCORD_WEBHOOK_URL
       return { success: false, skipped: false, error: `HTTP ${res.status}` };
     }
 
-    if (!isSpoiler && directVideoUrls.length > 0) {
-      // Bare URLs (not markdown-wrapped, not spoilered) so Discord can auto-unfurl a
-      // playable video; the mirror links in the embed above still work as a fallback.
-      const videoRes = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: `🎥 Direct video:\n${directVideoUrls.join('\n')}` }),
-      });
-
-      if (!videoRes.ok) {
-        const text = await videoRes.text();
-        logger.error({ status: videoRes.status, body: text, pubkey: account.pubkey }, 'Discord video follow-up failed');
-      }
-    }
-
     logger.info({ pubkey: account.pubkey, title: account.title }, 'Discord alert sent');
+
+    // Fire-and-forget: video resolution + Filebase mirroring + follow-up
+    // message run independently, after the alert has already been sent, so
+    // they never delay this response. Tracked only so the CLI can flush
+    // pending work before exiting (see waitForPendingDispatches).
+    trackDispatch(dispatchVideoFollowUp(account, webhookUrl, isSpoiler));
+
     return { success: true };
   } catch (err) {
     logger.error({ error: err.message, pubkey: account.pubkey }, 'Discord webhook error');
@@ -221,4 +265,11 @@ async function sendPollResultsAlert(poll, webhookUrl = config.DISCORD_WEBHOOK_UR
   }
 }
 
-module.exports = { sendDiscordAlert, sendPollAlert, sendPollResultsAlert, isSpoilerTitle };
+module.exports = {
+  sendDiscordAlert,
+  sendPollAlert,
+  sendPollResultsAlert,
+  isSpoilerTitle,
+  trackDispatch,
+  waitForPendingDispatches,
+};

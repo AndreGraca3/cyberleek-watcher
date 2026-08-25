@@ -3,7 +3,7 @@ const logger = require('./logger');
 const { fetchContentAccounts, fetchPollAccounts } = require('./fetcher');
 const { evaluateUpdates, evaluatePollUpdates, evaluatePollClosures } = require('./engine');
 const { createStore } = require('./store');
-const { sendDiscordAlert, sendPollAlert, sendPollResultsAlert } = require('./notifier');
+const { sendDiscordAlert, sendPollAlert, sendPollResultsAlert, trackDispatch, waitForPendingDispatches } = require('./notifier');
 
 async function runWatcher() {
   const store = createStore(config);
@@ -36,9 +36,11 @@ async function runWatcher() {
       { count: newAccounts.length },
       `Detected ${newAccounts.length} new leak(s)! Dispatching notifications...`
     );
-    // Dispatched in parallel so total latency is bounded by the slowest single
-    // leak's resolution time, not the sum across all new leaks in this batch.
-    await Promise.all(newAccounts.map(account => sendDiscordAlert(account)));
+    // Fire-and-forget: state below already reflects these accounts as seen
+    // regardless of alert outcome, so /check's response never needs to wait
+    // on Discord round-trips (main embed + decoupled video follow-up).
+    // Tracked only so the CLI can flush pending work before exiting.
+    trackDispatch(Promise.all(newAccounts.map(account => sendDiscordAlert(account))));
     stateChanged = true;
   } else {
     logger.info('Check complete: 0 new leaks. System up to date.');
@@ -55,7 +57,8 @@ async function runWatcher() {
       { count: newPolls.length },
       `Detected ${newPolls.length} new poll(s)! Dispatching notifications...`
     );
-    await Promise.all(newPolls.map(poll => sendPollAlert(poll)));
+    // Fire-and-forget, same rationale as the leak alerts above.
+    trackDispatch(Promise.all(newPolls.map(poll => sendPollAlert(poll))));
     stateChanged = true;
   } else {
     logger.info('Check complete: 0 new polls. System up to date.');
@@ -72,7 +75,8 @@ async function runWatcher() {
       { count: newlyClosedPolls.length },
       `Detected ${newlyClosedPolls.length} newly closed poll(s)! Dispatching result notifications...`
     );
-    await Promise.all(newlyClosedPolls.map(poll => sendPollResultsAlert(poll)));
+    // Fire-and-forget, same rationale as the leak alerts above.
+    trackDispatch(Promise.all(newlyClosedPolls.map(poll => sendPollResultsAlert(poll))));
     stateChanged = true;
   } else {
     logger.info('Check complete: 0 newly closed polls. System up to date.');
@@ -101,6 +105,12 @@ async function runWatcher() {
 async function main() {
   try {
     const result = await runWatcher();
+    // Unlike the long-lived HTTP server, the CLI process exits right after
+    // this resolves — so it must explicitly wait for any background
+    // dispatches (main alerts, plus their decoupled video follow-ups) that
+    // runWatcher/sendDiscordAlert kicked off without awaiting, or they'd be
+    // silently aborted by process.exit().
+    await waitForPendingDispatches();
     return result;
   } catch (err) {
     logger.error(err, 'Unhandled error in main');
