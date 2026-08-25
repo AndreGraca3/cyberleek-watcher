@@ -16,7 +16,7 @@ This watcher runs as a lightweight HTTP microservice:
    - Diffs each against its own persisted state (Upstash Redis or local fallback).
    - Dispatches rich embed notifications to Discord if new leaks and/or new polls are detected.
    - Returns execution results as JSON.
-3. **`GET /test-video?url=<mirror-link>`** - Live test harness (only active when `TEST_DISCORD_WEBHOOK_URL` is set): treats `url` exactly like one mirror item from a real leak (e.g. a bedrive.ru/temp.sh/upload.ee/arweave link), and runs it through the **full real pipeline** — `resolveDirectVideos` (mirror → direct video link, `src/resolver.js`) then best-effort Filebase mirroring if configured (`src/uploader.js`) — before posting the outcome to `TEST_DISCORD_WEBHOOK_URL`, never the real `DISCORD_WEBHOOK_URL` channel. If `TEST_ENDPOINT_TOKEN` is set, requests must include a matching `?token=` param, since this endpoint triggers real network fetches/downloads/uploads/webhook posts.
+3. **`GET /test-check?url=<mirror-link>`** - Live test harness (only active when `TEST_DISCORD_WEBHOOK_URL` is set): wraps `url` in a fake leak account (one mirror item, e.g. a bedrive.ru/temp.sh/upload.ee/arweave link) and runs it through the **actual production `sendDiscordAlert`** (`src/notifier.js`) — same rich embed, same `resolveDirectVideos`/Filebase-mirroring video follow-up — just pointed at `TEST_DISCORD_WEBHOOK_URL` instead of the real `DISCORD_WEBHOOK_URL` channel. If `TEST_ENDPOINT_TOKEN` is set, requests must include a matching `?token=` param, since this endpoint triggers real network fetches/downloads/uploads/webhook posts.
 
 An external free cron scheduler (**cron-job.org**) pings `/check` every **60 seconds**, which keeps the Render Free instance awake 24/7 (preventing the 15-minute idle sleep) and executes checks on a strict 1-minute schedule.
 
@@ -88,8 +88,8 @@ When `FILEBASE_ACCESS_KEY`, `FILEBASE_SECRET_KEY`, and `FILEBASE_BUCKET` are all
 │   ├── engine.js        # Bootstrap & diff detection engine (leaks + polls)
 │   ├── notifier.js      # Discord webhook rich embed sender (leaks + polls)
 │   ├── uploader.js      # Best-effort Filebase (S3-compatible) video mirroring
-│   ├── testVideoEndpoint.js # /test-video business logic (resolve + mirror + test webhook post)
-│   ├── server.js        # Native HTTP server (/health, /check, /test-video)
+│   ├── testEndpoint.js  # /test-check business logic: fake leak account -> real sendDiscordAlert, pointed at TEST_DISCORD_WEBHOOK_URL
+│   ├── server.js        # Native HTTP server (/health, /check, /test-check)
 │   └── index.js         # Core orchestrator & CLI runner
 ├── test/
 │   ├── verify-fetch.js  # Verifies live Solana RPC fetch & decode
