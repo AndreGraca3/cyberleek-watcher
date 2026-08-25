@@ -73,7 +73,10 @@ function waitForPendingDispatches() {
 async function dispatchVideoFollowUp(account, webhookUrl, isSpoiler) {
   try {
     const resolvedVideoUrls = await resolveDirectVideos(account.items);
-    if (resolvedVideoUrls.length === 0) return;
+    if (resolvedVideoUrls.length === 0) {
+      logger.warn({ pubkey: account.pubkey, itemCount: account.items.length }, 'No direct video links resolved, skipping video follow-up');
+      return;
+    }
 
     // Best-effort: mirrors each resolved video to Filebase when configured,
     // falling back to the original URL if mirroring is disabled, blocked, or
