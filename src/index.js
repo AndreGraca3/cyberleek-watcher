@@ -23,7 +23,13 @@ async function runWatcher() {
   );
 
   const updatedState = { ...leakState, ...pollState, ...closureState, updatedAt: new Date().toISOString() };
-  let stateChanged = false;
+  // Snapshot progress (pollTallySnapshots) must persist across runs even
+  // when nothing else changed, or the "2 consecutive stable reads" check in
+  // evaluatePollClosures can never accumulate and closures would only ever
+  // fire via the grace-period fallback.
+  const snapshotsChanged = JSON.stringify(closureState.pollTallySnapshots || {}) !==
+    JSON.stringify((storedState && storedState.pollTallySnapshots) || {});
+  let stateChanged = snapshotsChanged;
 
   if (isFirstRun) {
     logger.info(
